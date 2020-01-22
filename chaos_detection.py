@@ -22,6 +22,7 @@ from itertools import product
 import plotly.express as px
 from pandarallel import pandarallel # to parallelize pandas functions
 from scipy.fftpack import rfft
+from scipy.signal import spectrogram
 from functools import reduce
 import openml
 from openml.datasets.functions import get_dataset
@@ -289,7 +290,8 @@ def create_non_tda_features(path,
                             rolling_max_size=[],
                             rolling_min_size=[],
                             mad_size=[],
-                            fourier_coefficients=[]):
+                            fourier_coefficients=[],
+                            df = None):
     """
     INPUT:
         path: int (number to OpenML dataset)
@@ -308,9 +310,9 @@ def create_non_tda_features(path,
             mad_... for rolling mad features
             fourier_... for fourier coefficients
     """
-
-    df = get_dataset(path)
-    df = df.get_data()[0]
+    if df is None:
+        df = get_dataset(path)
+        df = df.get_data()[0]
     df.rename({'label': 'y', 'coord_0': 'x', 'coord_1': 'x_dot'}, axis='columns', inplace=True)
 
     pandarallel.initialize()
@@ -328,6 +330,15 @@ def create_non_tda_features(path,
     for n in fourier_coefficients:
         df[f'fourier_w_{n}'] = df['x'].rolling(fourier_window_size).parallel_apply(lambda x: rfft(x)[n],
                                                                                    raw=False)
+    # Add spectrogram feature
+    nfft = fourier_window_size
+    pad_zeros = lambda x: np.concatenate([np.zeros(int(np.ceil(nfft/2-0.5))), x, np.zeros(nfft//2)])
+    f, t, Sxx = spectrogram(df['x'],
+                            fs = 1, window = ('hann'),
+                            nfft = nfft, nperseg = nfft,  noverlap = nfft-1)
+    norms = np.linalg.norm(Sxx[2:, :], ord=1, axis=0)
+    df['spec_norm'] = pad_zeros(norms)[0:-1] # Is it the right choice?
+
     # Remove all rows with NaNs
     df.dropna(axis='rows', inplace=True)
     return df
